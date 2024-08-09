@@ -1,83 +1,140 @@
-# jenkins-ci-vprofile
+# AWS ECR Integration with Jenkins and ECS Cluster and Service Setup
 
-## Continuous Integration for vprofile Web App
+This guide provides a step-by-step process for integrating AWS ECR with Jenkins, followed by the setup of an ECS cluster and service for deploying the `vprofile` application.
 
-This project demonstrates a complete CI/CD pipeline for `vprofile`, a Java web application, using Jenkins. The pipeline integrates the following stages:
+## Part 1: AWS ECR Integration with Jenkins
 
-1. Fetching the repository from Git.
-2. Building the project with Maven.
-3. Running unit tests with Maven.
-4. Performing code analysis with Checkstyle.
-5. Performing static code analysis with SonarQube.
-6. Uploading build artifacts to Nexus.
-7. Sending notifications to Slack.
+### Step 1: Log in to Jenkins Instance and Update/Install AWS CLI
 
-The installation script can be used in AWS userdata or run as a script on a local Linux Ubuntu machine.
+1. **SSH into Jenkins Instance:**
+   ```bash
+   ssh ubuntu@<your_jenkins_instance_ip>
+   ```
 
-## Getting Started
+2. **Update the System and Install AWS CLI:**
+   ```bash
+   sudo apt-get update
+   sudo apt-get install awscli -y
+   ```
 
-### Prerequisites
+### Step 2: Install Docker on Jenkins Instance
 
-- Java 11 or later
-- Maven 3.6.3 or later
-- Jenkins 2.235.1 or later
-- Git
-- Checkstyle
-- SonarQube
-- Nexus Repository Manager
-- Slack
+1. **Install Docker:**
+   ```bash
+   sudo apt-get install \
+       ca-certificates \
+       curl \
+       gnupg \
+       lsb-release
 
-### Installation
+   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
-1. **Configure the various servers and run the installation script on each:**
+   echo \
+     "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
+     $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-    ```bash
-    ./jenkins.sh
-    ./nexus.sh
-    ./sonar.sh
-    ```
+   sudo apt-get update
+   sudo apt-get install docker-ce docker-ce-cli containerd.io -y
+   ```
 
-2. **Set up Jenkins:**
+2. **Add Jenkins User to Docker Group:**
+   ```bash
+   sudo usermod -aG docker jenkins
+   ```
 
-    - Install Jenkins on your local machine or server.
-    - Install the required Jenkins plugins: Git, Maven Integration, Checkstyle, SonarQube Scanner, Nexus Artifact Uploader, and Slack Notification.
+3. **Verify Jenkins User Membership:**
+   ```bash
+   id jenkins
+   ```
 
-3. **Configure Jenkins pipeline:**
+4. **Reboot the Instance to Apply Changes:**
+   ```bash
+   sudo reboot
+   ```
 
-    - Create a new Jenkins pipeline project.
-    - Copy the contents of the `Jenkinsfile` from this repository into the pipeline script.
+### Step 3: AWS Setup
 
-## Technologies Used
+1. **Create IAM User with Required Permissions:**
+   - Navigate to AWS Management Console -> IAM -> Users -> Add User.
+   - Set **Username** to `jenkins`.
+   - Attach the following policies directly:
+     - `AmazonEC2ContainerRegistryFullAccess`
+     - `AmazonECS_FullAccess`
+   - Click on **Create User**.
 
-- **Jenkins:** Automation server for building CI/CD pipelines.
-- **Maven:** Build automation tool for managing project dependencies and build lifecycle.
-- **Checkstyle:** Static code analysis tool to ensure code style compliance.
-- **SonarQube:** Continuous inspection tool for code quality.
-- **Nexus:** Repository manager for storing and distributing build artifacts.
-- **Slack:** Communication platform for team collaboration and notifications.
+2. **Create Access Key for the IAM User:**
+   - Go to **IAM** -> **Users** -> `jenkins` -> **Security Credentials** -> **Create Access Key**.
+   - Select **Command Line Interface (CLI)**.
+   - Note the **Access Key ID** and **Secret Access Key**.
 
-## Configuration
+3. **Create ECR Repository:**
+   - Navigate to AWS Management Console -> ECR -> Repositories -> Create repository.
+   - Set **Repository name** to `vprofileappimg`.
+   - Click **Create repository**.
 
-### Jenkins Configuration
+### Step 4: Jenkins Setup
 
-- Install Jenkins plugins: Git, Maven Integration, Checkstyle, SonarQube Scanner, Nexus Artifact Uploader, Slack Notification.
-- Configure SonarQube in Jenkins: Manage Jenkins -> Configure System -> SonarQube Servers.
-- Configure Nexus credentials in Jenkins: Manage Jenkins -> Manage Credentials.
-- Configure Slack notifications in Jenkins: Manage Jenkins -> Configure System -> Slack.
+1. **Install Jenkins Plugins:**
+   - Go to **Manage Jenkins** -> **Manage Plugins** -> **Available**.
+   - Search and install the following plugins:
+     - `Amazon ECR`
+     - `Docker Pipeline`
+     - `AWS SDK for Credentials`
+     - `CloudBees Docker Build and Publish`
 
-### Maven Configuration
+2. **Add AWS Credentials in Jenkins:**
+   - Go to **Manage Jenkins** -> **Manage Credentials** -> **(Jenkins) -> Global credentials (unrestricted)** -> **Add Credentials**.
+   - Select **AWS Credentials**.
+   - Set the **ID** and **Description** to `awscreds`.
+   - Enter the **Access Key ID** and **Secret Access Key** obtained earlier.
 
-- Ensure `pom.xml` includes necessary plugins for Checkstyle and SonarQube.
+## Part 2: ECS Cluster and Service Setup
 
-### Checkstyle Configuration
+### 1. Create ECS Cluster
 
-- Include `checkstyle.xml` in the project root directory.
+- **Cluster Name:** `vprofile`
+- **Subnets:** Select all available subnets in the region.
+- **Monitoring:** Enable Container Insights.
+- **Tags:** Add relevant tags for easy identification and resource management.
 
-## Contributing
+### 2. Create Task Definition
 
-Contributions are welcome! Please fork this repository and submit pull requests.
+- **Task Definition Name:** `vprofileapptask`
+- **Launch Type:** AWS Fargate
+- **Operating System:** Linux
+- **Architecture:** x86_64
+- **CPU and Memory:** 1 vCPU, 2GB Memory
+- **Container Configuration:**
+  - **Container Name:** `vproapp`
+  - **Image URI:** Enter the ECR URI for your application image.
+  - **Container Port:** 8080
+- **Tags:** Add relevant tags for easy identification.
 
-## License
+### 3. ECS Roles
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- **Attach IAM Policies:**
+  - Search and attach the `CloudWatchLogsFullAccess` policy.
+  - Click "Add Permission" to save changes.
+
+### 4. Create Service
+
+- **Launch Type:** Fargate
+- **Service Type:** Service
+- **Task Definition Family:** Select `vprofileapptask` and its latest revision.
+- **Service Name:** `vprofileappsvc`
+- **Desired Task Count:** 1
+- **Deployment Failure Detection:** Enable for better monitoring.
+- **Security Group:**
+  - **Name:** `vprofileappecselb-sg`
+  - **Inbound Rules:**
+    - Allow HTTP (Port 80) from anywhere.
+    - Allow custom TCP (Port 8080) from anywhere.
+- **Load Balancer:**
+  - **Type:** Application Load Balancer
+  - **Name:** `vprofileappelbecs`
+  - **Listener Ports:** 80 (HTTP)
+  - **Target Group:**
+    - **Name:** `vproecstg`
+    - **Health Check Path:** `/login`
+  - **Mapping:** Map container port `8080` to load balancer port `80`.
 
